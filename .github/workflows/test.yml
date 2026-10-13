@@ -1,0 +1,66 @@
+name: test-render
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+      recipe:
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: test-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer ffmpeg og skrift
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-montserrat > /dev/null
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Installer Python-pakker
+        run: pip install -q -r requirements.txt
+
+      - name: Hent Whisper-modell fra cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-en-v1
+
+      - name: Skriv oppskrift
+        env:
+          RECIPE: ${{ inputs.recipe }}
+        run: |
+          test -n "$TAG" || { echo "Mangler tag"; exit 1; }
+          printf '%s' "$RECIPE" > recipe.json
+          python -c "import json; json.load(open('recipe.json'))"
+
+      - name: Lag filmen
+        run: python render.py recipe.json "${TAG}.mp4"
+
+      - name: Last opp ferdig film
+        run: |
+          gh release create "$TAG" "${TAG}.mp4" --title "$TAG" --notes "OK"
+
+      - name: Meld feil
+        if: failure()
+        run: |
+          echo "Rendering feilet. Se Actions-logg: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > error.txt
+          gh release create "$TAG" error.txt --title "$TAG" --notes "FAILED" || true
