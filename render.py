@@ -32,7 +32,9 @@ def main(recipe_path, out_path):
     els = recipe["elements"]
     voice = next(e for e in els if e.get("type") == "audio")
     # Tomme klipp hoppes over, så filmer med 4 klipp virker selv om oppskriften har 7 plasser
-    clips = [e for e in els if e.get("type") == "video" and str(e.get("source") or "").strip()]
+    # «-» i O–U betyr at scenen ikke skal lages (kortere filmer), og gir kilden «...id=-»
+    clips = [e for e in els if e.get("type") == "video"
+             and str(e.get("source") or "").strip() and not str(e.get("source")).rstrip().endswith("id=-")]
     sub = next((e for e in els if e.get("type") == "text"), {})
     if not clips:
         raise SystemExit("Oppskriften har ingen videoklipp")
