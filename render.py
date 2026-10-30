@@ -31,7 +31,8 @@ def main(recipe_path, out_path):
         recipe = json.load(f)
     els = recipe["elements"]
     voice = next(e for e in els if e.get("type") == "audio")
-    clips = [e for e in els if e.get("type") == "video"]
+    # Tomme klipp hoppes over, så filmer med 4 klipp virker selv om oppskriften har 7 plasser
+    clips = [e for e in els if e.get("type") == "video" and str(e.get("source") or "").strip()]
     sub = next((e for e in els if e.get("type") == "text"), {})
     if not clips:
         raise SystemExit("Oppskriften har ingen videoklipp")
