@@ -7,7 +7,7 @@ Oppskriften inneholder: ett lydspor (Voiceover), sju videoklipp (track 1) og et 
 import json, os, subprocess, sys
 
 from dl import download
-from subs import build_subtitles
+from subs import build_subtitles, first_sentence, transcribe
 
 W, H, FPS = 1080, 1920, 25
 WORK = "work"
@@ -39,7 +39,8 @@ def main(recipe_path, out_path):
     vpath = download(voice["source"], f"{WORK}/voice.mp3")
     vdur = probe_duration(vpath)
     total = vdur + 0.6  # litt luft etter siste ord
-    share = total / len(clips)
+    # Hele bilder per klipp, så summen stemmer med lyden
+    share = round(total / len(clips) * FPS) / FPS
     print(f"Stemme {vdur:.2f}s, {len(clips)} klipp à {share:.2f}s", flush=True)
 
     parts = []
@@ -47,9 +48,16 @@ def main(recipe_path, out_path):
         src = download(c["source"], f"{WORK}/clip{i}.mp4")
         part = f"{WORK}/part{i}.mp4"
         cdur = probe_duration(src)
-        loop = ["-stream_loop", "-1"] if cdur < share else []
-        run(["ffmpeg", "-y", "-v", "error", *loop, "-i", src, "-t", f"{share:.3f}", "-an",
-             "-vf", f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},fps={FPS},setsar=1,format=yuv420p",
+        # Klipp som er for korte ble før lagt i loop, og hoppet tilbake til start ga et blink (analysen 30.10).
+        # Nå: senk farten litt (maks 1,25x), og hold siste bilde for resten.
+        slow = ""
+        if cdur < share:
+            ratio = min(share / cdur, 1.25)
+            slow = f"setpts={ratio:.4f}*PTS,"
+            if cdur * ratio < share:
+                slow += f"tpad=stop_mode=clone:stop_duration={share - cdur * ratio + 0.2:.3f},"
+        run(["ffmpeg", "-y", "-v", "error", "-i", src, "-t", f"{share:.3f}", "-an",
+             "-vf", f"{slow}scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{H},fps={FPS},setsar=1,format=yuv420p",
              "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", part])
         parts.append(part)
 
@@ -61,7 +69,13 @@ def main(recipe_path, out_path):
     vf = "null"
     if sub:
         try:
-            build_subtitles(vpath, sub, f"{WORK}/subs.ass")
+            words = transcribe(vpath)
+            # Hooken: egen tekst i oppskriften, ellers første setning i stemmen
+            hook = (recipe["hook"], 0.0) if recipe.get("hook") else first_sentence(words)
+            if recipe.get("hook"):
+                hook = (recipe["hook"], first_sentence(words)[1])
+            end_text = recipe.get("end_text", "Follow for more")
+            build_subtitles(words, sub, f"{WORK}/subs.ass", hook=hook, end_text=end_text, total=total)
             vf = f"ass={WORK}/subs.ass"
         except Exception as e:  # undertekster skal ikke stoppe hele filmen
             print(f"ADVARSEL: undertekster feilet: {e}", flush=True)
