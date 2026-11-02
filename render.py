@@ -83,19 +83,24 @@ def main(recipe_path, out_path):
         except Exception as e:  # undertekster skal ikke stoppe hele filmen
             print(f"ADVARSEL: undertekster feilet: {e}", flush=True)
 
-    # To-pass loudnorm: ett pass treffer ofte 1–2 LU for lavt på korte stemmer (målt -15,9 på v4_01)
-    ln = "loudnorm=I=-14:TP=-1.5:LRA=11"
+    # Lyd til -14 LUFS: loudnorm (dynamisk), mål resultatet, juster med fast gain og limiter.
+    # Lineær to-pass ga -15,3 til -15,5 når stemmen er svak (gain begrenses av true peak).
+    apath = f"{WORK}/voice_norm.wav"
+    run(["ffmpeg", "-y", "-v", "error", "-i", vpath, "-af",
+         f"apad,atrim=0:{total:.3f},loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000", "-ac", "2", apath])
+    afilt = "anull"
     try:
-        meas = subprocess.run(["ffmpeg", "-hide_banner", "-i", vpath, "-af",
-                               f"apad,atrim=0:{total:.3f},{ln}:print_format=json", "-f", "null", "-"],
+        meas = subprocess.run(["ffmpeg", "-hide_banner", "-i", apath, "-af",
+                               "loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"],
                               capture_output=True, text=True).stderr
         m = json.loads(meas[meas.rindex("{"):meas.rindex("}") + 1])
-        ln += (f":measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}"
-               f":measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true")
-    except Exception as e:  # faller tilbake til ett pass
-        print(f"ADVARSEL: loudnorm-måling feilet: {e}", flush=True)
-    run(["ffmpeg", "-y", "-v", "error", "-i", f"{WORK}/video.mp4", "-i", vpath,
-         "-filter_complex", f"[0:v]{vf}[v];[1:a]apad,atrim=0:{total:.3f},{ln},aresample=48000[a]",
+        gain = max(-6.0, min(6.0, -14.0 - float(m["input_i"])))
+        afilt = f"volume={gain:.2f}dB,alimiter=limit=0.84:level=false"
+        print(f"Lyd: {m['input_i']} LUFS etter pass 1, gain {gain:+.2f} dB", flush=True)
+    except Exception as e:  # beholder pass 1
+        print(f"ADVARSEL: lydmåling feilet: {e}", flush=True)
+    run(["ffmpeg", "-y", "-v", "error", "-i", f"{WORK}/video.mp4", "-i", apath,
+         "-filter_complex", f"[0:v]{vf}[v];[1:a]{afilt},aresample=48000[a]",
          "-map", "[v]", "-map", "[a]", "-t", f"{total:.3f}",
          "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-profile:v", "high", "-pix_fmt", "yuv420p",
          "-maxrate", "4500k", "-bufsize", "9000k", "-g", "50", "-r", str(FPS),
